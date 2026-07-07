@@ -518,7 +518,11 @@ function openQty(code, existingQty) {
   $("qtyCode").textContent = code;
   $("qtyInput").value = existingQty || 1;
   $("qtyModal").classList.add("open");
-  setTimeout(() => { $("qtyInput").focus(); $("qtyInput").select(); }, 50);
+  // auto-focus only where a physical keyboard is likely; on touch it pops
+  // the keyboard and highlights the value for no reason
+  if (!window.matchMedia("(pointer: coarse)").matches) {
+    setTimeout(() => { $("qtyInput").focus(); $("qtyInput").select(); }, 50);
+  }
 }
 function closeQty() { $("qtyModal").classList.remove("open"); qtyTarget = null; }
 
@@ -572,7 +576,7 @@ $("manualInput").addEventListener("keydown", e => {
 });
 
 /* ---------- camera scanning ---------- */
-let camStream = null, camLoop = null, zxingReader = null, lastHit = { code: "", ts: 0 };
+let camStream = null, camLoop = null, zxingControls = null, lastHit = { code: "", ts: 0 };
 
 $("camBtn").addEventListener("click", openCamera);
 $("camClose").addEventListener("click", closeCamera);
@@ -655,9 +659,10 @@ async function startZxing(video) {
         document.head.appendChild(s);
       });
     }
-    zxingReader = new ZXingBrowser.BrowserMultiFormatReader();
+    const reader = new ZXingBrowser.BrowserMultiFormatReader();
     $("camStatus").textContent = "Point the camera at a barcode";
-    zxingReader.decodeFromVideoElement(video, result => {
+    // keep the controls handle — it is the only way to stop the decode loop
+    zxingControls = await reader.decodeFromVideoElement(video, result => {
       if (result) hit(result.getText());
     });
   } catch (err) {
@@ -666,6 +671,8 @@ async function startZxing(video) {
 }
 
 function hit(code) {
+  // stray results can still arrive after the camera closes — never act on them
+  if (!$("camModal").classList.contains("open")) return;
   const now = Date.now();
   // ignore repeat reads of the same label for 2.5s
   if (code === lastHit.code && now - lastHit.ts < 2500) return;
@@ -677,7 +684,7 @@ function hit(code) {
 function closeCamera() {
   $("camModal").classList.remove("open");
   if (camLoop) { clearInterval(camLoop); camLoop = null; }
-  if (zxingReader) { try { zxingReader.stopContinuousDecode(); } catch (e) {} zxingReader = null; }
+  if (zxingControls) { try { zxingControls.stop(); } catch (e) {} zxingControls = null; }
   if (camStream) { camStream.getTracks().forEach(t => t.stop()); camStream = null; }
   $("camVideo").srcObject = null;
 }
