@@ -577,8 +577,15 @@ let camStream = null, camLoop = null, zxingReader = null, lastHit = { code: "", 
 $("camBtn").addEventListener("click", openCamera);
 $("camClose").addEventListener("click", closeCamera);
 
-function camErrorText(err) {
+const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
+  || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1); // iPadOS reports as Mac
+
+function camErrorText(err, isIOS) {
+  if (isIOS === undefined) isIOS = IS_IOS;
   if (err.name === "NotAllowedError" || err.name === "SecurityError") {
+    if (isIOS) {
+      return "Camera access is blocked. On iPhone/iPad: open Settings → Apps → Safari (or your browser) → Camera and choose Ask or Allow. Then, on this page, tap the “aA” / page-settings icon in the address bar → Website Settings → Camera → Allow. Reload the page and try again.";
+    }
     return "Camera access is blocked, so the browser will not ask again. To fix: tap the icon next to the address bar → Permissions / Site settings → Camera → Allow, then reopen the camera. If that option is missing, check your phone's app settings and make sure the browser itself is allowed to use the camera.";
   }
   if (err.name === "NotFoundError" || err.name === "OverconstrainedError") {
