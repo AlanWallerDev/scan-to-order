@@ -138,10 +138,24 @@
     padding: 16px;
     width: 100%;
     max-width: 560px;
-    max-height: 90vh;
+    max-height: 85vh;
+    max-height: 85dvh; /* mobile browsers: measure against the real visible viewport */
     overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
   }
   .modal h2 { font-size: 17px; margin-bottom: 12px; }
+  .modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+  .modal-head h2 { margin-bottom: 0; }
+  .modal-x {
+    background: #e5e6ea;
+    border: none;
+    border-radius: 8px;
+    font-size: 18px;
+    line-height: 1;
+    padding: 10px 14px;
+    cursor: pointer;
+    color: var(--text);
+  }
   .modal .row { margin-top: 12px; }
   .modal .row .btn { flex: 1; }
   .qty-code {
@@ -320,7 +334,10 @@
 <!-- export modal -->
 <div class="modal-backdrop" id="exportModal">
   <div class="modal">
-    <h2>Order file</h2>
+    <div class="modal-head">
+      <h2>Order file</h2>
+      <button class="modal-x" id="exportX" aria-label="Close">&#10005;</button>
+    </div>
     <textarea id="exportText" readonly></textarea>
     <div class="export-actions">
       <button class="btn" id="shareBtn">&#128228; Share&hellip;</button>
@@ -338,7 +355,10 @@
 <!-- settings modal -->
 <div class="modal-backdrop" id="settingsModal">
   <div class="modal">
-    <h2>Settings</h2>
+    <div class="modal-head">
+      <h2>Settings</h2>
+      <button class="modal-x" id="settingsX" aria-label="Close">&#10005;</button>
+    </div>
     <label class="field-label" for="emailInput">Send order files to (email)</label>
     <input type="email" id="emailInput" placeholder="orders@example.com">
 
@@ -557,18 +577,42 @@ let camStream = null, camLoop = null, zxingReader = null, lastHit = { code: "", 
 $("camBtn").addEventListener("click", openCamera);
 $("camClose").addEventListener("click", closeCamera);
 
+function camErrorText(err) {
+  if (err.name === "NotAllowedError" || err.name === "SecurityError") {
+    return "Camera access is blocked, so the browser will not ask again. To fix: tap the icon next to the address bar → Permissions / Site settings → Camera → Allow, then reopen the camera. If that option is missing, check your phone's app settings and make sure the browser itself is allowed to use the camera.";
+  }
+  if (err.name === "NotFoundError" || err.name === "OverconstrainedError") {
+    return "No usable camera was found on this device.";
+  }
+  if (err.name === "NotReadableError") {
+    return "The camera is busy — another app or tab is using it. Close it and try again.";
+  }
+  return "Camera error (" + err.name + "): " + err.message;
+}
+
 async function openCamera() {
   if (!state.currentLoc) { toast("Pick a location first"); return; }
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    toast("Camera not available in this browser"); return;
-  }
   $("camModal").classList.add("open");
-  $("camStatus").textContent = "Starting camera…";
+  if (!window.isSecureContext) {
+    $("camStatus").textContent = "Camera needs a secure (https) connection — this page was loaded over plain http.";
+    return;
+  }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    $("camStatus").textContent = "This browser can't access the camera. If you opened this link inside another app (email, chat, QR reader), use its menu to open the page in Chrome or Safari instead.";
+    return;
+  }
+  $("camStatus").textContent = "Requesting camera permission…";
   try {
-    camStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } },
-      audio: false
-    });
+    try {
+      camStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "environment" },
+        audio: false
+      });
+    } catch (err) {
+      if (err.name === "NotAllowedError" || err.name === "SecurityError") throw err;
+      // rear camera unavailable — fall back to any camera at all
+      camStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    }
     const video = $("camVideo");
     video.srcObject = camStream;
     await video.play();
@@ -576,7 +620,7 @@ async function openCamera() {
     if ("BarcodeDetector" in window) startNativeDetect(video);
     else startZxing(video);
   } catch (err) {
-    $("camStatus").textContent = "Camera error: " + err.message;
+    $("camStatus").textContent = camErrorText(err);
   }
 }
 
@@ -683,6 +727,7 @@ $("exportBtn").addEventListener("click", () => {
   $("exportModal").classList.add("open");
 });
 $("exportClose").addEventListener("click", () => $("exportModal").classList.remove("open"));
+$("exportX").addEventListener("click", () => $("exportModal").classList.remove("open"));
 
 $("shareBtn").addEventListener("click", async () => {
   const text = $("exportText").value;
@@ -774,6 +819,7 @@ $("settingsBtn").addEventListener("click", () => {
   updateFmtPreview();
   $("settingsModal").classList.add("open");
 });
+$("settingsX").addEventListener("click", () => $("settingsModal").classList.remove("open"));
 $("settingsSave").addEventListener("click", () => {
   const fmt = formatFromFields();
   if (!fmt.line.trim()) { toast("Item line can't be empty"); return; }
