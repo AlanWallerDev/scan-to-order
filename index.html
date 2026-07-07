@@ -2,8 +2,13 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="theme-color" content="#1a5fb4">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Scan to Order">
 <title>Scan to Order</title>
 <style>
   :root {
@@ -266,6 +271,10 @@
       <select id="locSelect"></select>
       <button class="btn secondary" id="addLocBtn" style="flex:0 0 auto">+ New</button>
     </div>
+    <div class="row" id="locActions" style="margin-top:8px">
+      <button class="btn secondary" id="renameLocBtn" style="flex:1">Rename</button>
+      <button class="btn secondary" id="delLocBtn" style="flex:1">Delete location</button>
+    </div>
   </div>
 
   <div class="card">
@@ -297,7 +306,7 @@
 
 <!-- quantity modal -->
 <div class="modal-backdrop" id="qtyModal">
-  <div class="modal">
+  <div class="modal" role="dialog" aria-modal="true" aria-label="Quantity to order">
     <h2>Quantity to order</h2>
     <div class="qty-code" id="qtyCode"></div>
     <div class="qty-stepper">
@@ -319,7 +328,7 @@
 
 <!-- camera modal -->
 <div class="modal-backdrop" id="camModal">
-  <div class="modal">
+  <div class="modal" role="dialog" aria-modal="true" aria-label="Barcode scanner">
     <div id="camWrap">
       <video id="camVideo" playsinline muted></video>
       <div id="camReticle"></div>
@@ -333,7 +342,7 @@
 
 <!-- export modal -->
 <div class="modal-backdrop" id="exportModal">
-  <div class="modal">
+  <div class="modal" role="dialog" aria-modal="true" aria-label="Order file">
     <div class="modal-head">
       <h2>Order file</h2>
       <button class="modal-x" id="exportX" aria-label="Close">&#10005;</button>
@@ -354,7 +363,7 @@
 
 <!-- settings modal -->
 <div class="modal-backdrop" id="settingsModal">
-  <div class="modal">
+  <div class="modal" role="dialog" aria-modal="true" aria-label="Settings">
     <div class="modal-head">
       <h2>Settings</h2>
       <button class="modal-x" id="settingsX" aria-label="Close">&#10005;</button>
@@ -407,7 +416,10 @@ function load() {
   } catch (e) { /* corrupt store — start fresh */ }
   state.format = Object.assign({}, DEFAULT_FORMAT, state.format || {});
 }
-function save() { localStorage.setItem(STORE_KEY, JSON.stringify(state)); }
+function save() {
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); }
+  catch (e) { toast("Couldn't save — device storage is full or blocked", 3500); }
+}
 
 /* ---------- helpers ---------- */
 const $ = id => document.getElementById(id);
@@ -417,6 +429,14 @@ function toast(msg, ms) {
   t.style.display = "block";
   clearTimeout(toast._t);
   toast._t = setTimeout(() => t.style.display = "none", ms || 1600);
+}
+/* iOS only lets audio start inside a user gesture — call this from tap
+   handlers so the later beep (fired from a scanner callback) is audible */
+function initAudio() {
+  try {
+    if (!beep._ctx) beep._ctx = new (window.AudioContext || window.webkitAudioContext)();
+    if (beep._ctx.state === "suspended") beep._ctx.resume();
+  } catch (e) { /* audio unavailable */ }
 }
 function beep() {
   try {
@@ -448,6 +468,7 @@ function renderLocations() {
   }
   sel.value = state.currentLoc;
   $("locName").textContent = state.currentLoc || "—";
+  $("locActions").style.display = state.currentLoc ? "flex" : "none";
 }
 
 $("addLocBtn").addEventListener("click", () => {
@@ -460,6 +481,39 @@ $("addLocBtn").addEventListener("click", () => {
 
 $("locSelect").addEventListener("change", e => {
   state.currentLoc = e.target.value;
+  save(); renderAll();
+});
+
+$("renameLocBtn").addEventListener("click", () => {
+  if (!state.currentLoc) return;
+  const old = state.currentLoc;
+  const name = (prompt("Rename location:", old) || "").trim();
+  if (!name || name === old) return;
+  if (state.locations.includes(name)) {
+    if (!confirm('"' + name + '" already exists — merge the scans from "' + old + '" into it?')) return;
+    const target = state.scans[name] || (state.scans[name] = []);
+    for (const it of (state.scans[old] || [])) {
+      const ex = target.find(t => t.code === it.code);
+      if (ex) ex.qty += it.qty; else target.push(it);
+    }
+    state.locations = state.locations.filter(l => l !== old);
+  } else {
+    state.locations[state.locations.indexOf(old)] = name;
+    if (state.scans[old]) state.scans[name] = state.scans[old];
+  }
+  delete state.scans[old];
+  state.currentLoc = name;
+  save(); renderAll();
+});
+
+$("delLocBtn").addEventListener("click", () => {
+  if (!state.currentLoc) return;
+  const n = (state.scans[state.currentLoc] || []).length;
+  const what = n ? ' and its ' + n + ' scanned item' + (n === 1 ? '' : 's') : '';
+  if (!confirm('Delete location "' + state.currentLoc + '"' + what + '?')) return;
+  state.locations = state.locations.filter(l => l !== state.currentLoc);
+  delete state.scans[state.currentLoc];
+  state.currentLoc = state.locations[0] || "";
   save(); renderAll();
 });
 
@@ -553,23 +607,43 @@ function saveQty() {
   toast("Saved " + qtyTarget + " ×" + qty);
 }
 
+/* if a new scan arrives while the quantity popup is still open, commit the
+   pending entry instead of silently discarding it (rapid wedge-scanner use) */
+function commitPending() {
+  if (!$("qtyModal").classList.contains("open") || qtyTarget === null) return;
+  const typed = parseInt($("qtyInput").value, 10);
+  const items = itemsHere();
+  const existing = items.find(it => it.code === qtyTarget);
+  const qty = (typed && typed >= 1) ? typed : (existing ? existing.qty : 1);
+  if (existing) existing.qty = qty;
+  else items.push({ code: qtyTarget, qty: qty, ts: new Date().toISOString() });
+  save();
+}
+
 /* a captured code (from camera, wedge scanner, or typing) enters here */
 function onCode(code) {
-  code = (code || "").trim();
+  // control characters (possible in QR codes) would corrupt the export file
+  code = Array.from(String(code || ""), ch => {
+    const cc = ch.charCodeAt(0);
+    return (cc < 32 || cc === 127) ? " " : ch;
+  }).join("").trim();
   if (!code) return;
   if (!state.currentLoc) { toast("Pick a location first"); return; }
+  commitPending();
   beep();
   const existing = itemsHere().find(it => it.code === code);
   openQty(code, existing ? existing.qty : 1);
 }
 
 $("manualAddBtn").addEventListener("click", () => {
+  initAudio();
   onCode($("manualInput").value);
   $("manualInput").value = "";
 });
 $("manualInput").addEventListener("keydown", e => {
   if (e.key === "Enter") { // wedge scanners send Enter after the code
     e.preventDefault();
+    initAudio();
     onCode($("manualInput").value);
     $("manualInput").value = "";
   }
@@ -601,8 +675,12 @@ function camErrorText(err, isIOS) {
   return "Camera error (" + err.name + "): " + err.message;
 }
 
+const camOpen = () => $("camModal").classList.contains("open");
+
 async function openCamera() {
   if (!state.currentLoc) { toast("Pick a location first"); return; }
+  initAudio(); // user gesture — unlock audio so the scan beep works on iOS
+  lastHit = { code: "", ts: 0 }; // fresh session: allow immediate re-scan of the last label
   $("camModal").classList.add("open");
   if (!window.isSecureContext) {
     $("camStatus").textContent = "Camera needs a secure (https) connection — this page was loaded over plain http.";
@@ -614,19 +692,24 @@ async function openCamera() {
   }
   $("camStatus").textContent = "Requesting camera permission…";
   try {
+    let stream;
     try {
-      camStream = await navigator.mediaDevices.getUserMedia({
+      stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: "environment" },
         audio: false
       });
     } catch (err) {
       if (err.name === "NotAllowedError" || err.name === "SecurityError") throw err;
       // rear camera unavailable — fall back to any camera at all
-      camStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
     }
+    // the user may have closed the modal while the permission prompt was up
+    if (!camOpen()) { stream.getTracks().forEach(t => t.stop()); return; }
+    camStream = stream;
     const video = $("camVideo");
     video.srcObject = camStream;
     await video.play();
+    if (!camOpen()) { closeCamera(); return; }
     $("camStatus").textContent = "Point the camera at a barcode";
     if ("BarcodeDetector" in window) startNativeDetect(video);
     else startZxing(video);
@@ -635,39 +718,70 @@ async function openCamera() {
   }
 }
 
-function startNativeDetect(video) {
-  const detector = new BarcodeDetector({
-    formats: ["code_128", "code_39", "ean_13", "ean_8", "upc_a", "upc_e", "itf", "qr_code", "data_matrix"]
-  });
+async function startNativeDetect(video) {
+  let detector;
+  try {
+    // desktop Chrome defines BarcodeDetector but often has no detection
+    // service behind it — probe before trusting it
+    const supported = await BarcodeDetector.getSupportedFormats();
+    const wanted = ["code_128", "code_39", "ean_13", "ean_8", "upc_a", "upc_e", "itf", "qr_code", "data_matrix"];
+    const formats = wanted.filter(f => supported.includes(f));
+    if (!formats.length) throw new Error("no supported formats");
+    detector = new BarcodeDetector({ formats: formats });
+  } catch (e) {
+    startZxing(video);
+    return;
+  }
+  if (!camOpen()) return;
+  let consecFails = 0, fellBack = false;
   camLoop = setInterval(async () => {
     if (video.readyState < 2) return;
     try {
       const codes = await detector.detect(video);
+      consecFails = 0;
       if (codes.length) hit(codes[0].rawValue);
-    } catch (e) { /* frame not ready */ }
+    } catch (e) {
+      // rejects every frame → the platform service is missing; use ZXing
+      if (!fellBack && ++consecFails >= 8) {
+        fellBack = true;
+        clearInterval(camLoop); camLoop = null;
+        startZxing(video);
+      }
+    }
   }, 250);
 }
 
 async function startZxing(video) {
+  if (zxingControls || !camOpen()) return;
   $("camStatus").textContent = "Loading scanner library…";
   try {
     if (!window.ZXingBrowser) {
-      await new Promise((res, rej) => {
-        const s = document.createElement("script");
-        s.src = "https://unpkg.com/@zxing/browser@0.1.5/umd/zxing-browser.min.js";
-        s.onload = res; s.onerror = () => rej(new Error("could not load library (offline?)"));
-        document.head.appendChild(s);
-      });
+      // vendored copy first; CDN as a fallback if it's somehow missing
+      try { await loadScript("zxing-browser.min.js"); }
+      catch (e) { await loadScript("https://unpkg.com/@zxing/browser@0.1.5/umd/zxing-browser.min.js"); }
     }
+    if (!camOpen()) return;
     const reader = new ZXingBrowser.BrowserMultiFormatReader();
     $("camStatus").textContent = "Point the camera at a barcode";
     // keep the controls handle — it is the only way to stop the decode loop
     zxingControls = await reader.decodeFromVideoElement(video, result => {
       if (result) hit(result.getText());
     });
+    // the modal may have closed while the decoder was starting up
+    if (!camOpen()) { try { zxingControls.stop(); } catch (e) {} zxingControls = null; }
   } catch (err) {
     $("camStatus").textContent = "Scanner error: " + err.message;
   }
+}
+
+function loadScript(src) {
+  return new Promise((res, rej) => {
+    const s = document.createElement("script");
+    s.src = src;
+    s.onload = res;
+    s.onerror = () => { s.remove(); rej(new Error("could not load " + src)); };
+    document.head.appendChild(s);
+  });
 }
 
 function hit(code) {
@@ -690,12 +804,14 @@ function closeCamera() {
 }
 
 /* ---------- export ---------- */
-/* fill {tokens} in a template, then turn \t and \n escapes into real characters */
+/* turn \t and \n escapes in the template into real characters FIRST, then
+   fill {tokens} — so scanned values containing literal "\t" text pass through
+   untouched instead of becoming tabs in the file */
 function expand(tpl, vars) {
   return tpl
-    .replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k]) : m))
     .replace(/\\t/g, "\t")
-    .replace(/\\n/g, "\r\n");
+    .replace(/\\n/g, "\r\n")
+    .replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k]) : m));
 }
 
 function renderFileText(fmt, locations, scans) {
@@ -758,9 +874,13 @@ $("shareBtn").addEventListener("click", async () => {
 });
 
 $("emailBtn").addEventListener("click", () => {
+  const text = $("exportText").value;
+  // mailto links have length limits that vary by mail app — large files get
+  // cut off silently, so warn and steer toward Share/Download
+  if (text.length > 1500 && !confirm("This file is long, and email links often cut off large text. Share or Download is safer for big scans. Open email anyway?")) return;
   const to = encodeURIComponent(state.email || "");
   const subject = encodeURIComponent("Order scan export " + fileName());
-  const body = encodeURIComponent($("exportText").value);
+  const body = encodeURIComponent(text);
   location.href = "mailto:" + to + "?subject=" + subject + "&body=" + body;
 });
 
@@ -851,14 +971,38 @@ $("wipeBtn").addEventListener("click", () => {
   renderAll();
 });
 
-/* close modals when tapping the backdrop */
-for (const id of ["qtyModal", "exportModal", "settingsModal"]) {
-  $(id).addEventListener("click", e => { if (e.target === $(id)) $(id).classList.remove("open"); });
+/* close modals when tapping the backdrop or pressing Escape — always through
+   the proper close function so camera/state teardown happens */
+const MODAL_CLOSERS = {
+  camModal: closeCamera,
+  qtyModal: closeQty,
+  exportModal: () => $("exportModal").classList.remove("open"),
+  settingsModal: () => $("settingsModal").classList.remove("open")
+};
+for (const id in MODAL_CLOSERS) {
+  $(id).addEventListener("click", e => { if (e.target === $(id)) MODAL_CLOSERS[id](); });
 }
+document.addEventListener("keydown", e => {
+  if (e.key !== "Escape") return;
+  for (const id in MODAL_CLOSERS) {
+    if ($(id).classList.contains("open")) { MODAL_CLOSERS[id](); return; }
+  }
+});
 
 /* ---------- init ---------- */
 load();
 renderAll();
+
+/* ask the browser not to evict our storage (iOS deletes site data unused for
+   7 days; installed/persistent apps are exempt) */
+if (navigator.storage && navigator.storage.persist) {
+  navigator.storage.persist().catch(() => {});
+}
+
+/* offline support + cache for the scanner library */
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("sw.js").catch(() => {});
+}
 </script>
 </body>
 </html>
