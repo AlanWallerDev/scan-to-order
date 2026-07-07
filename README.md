@@ -7,7 +7,8 @@ Workers pick a **location**, scan item barcodes (phone camera, Bluetooth/USB wed
 ## Features
 
 - **Barcode scanning** via the browser's built-in `BarcodeDetector` (Chrome/Android), with a vendored ZXing fallback for browsers without a working detector (iOS Safari, desktop Chrome). Wedge scanners that type-and-press-Enter work out of the box through the manual entry field.
-- **Quantity prompt** after every scan, with −/+ stepper and +5 / +10 / +100 quick-add buttons. Re-scanning an item lets you correct its quantity instead of duplicating it; scanning a new item while the prompt is open auto-saves the pending entry.
+- **Continuous scanning** — the camera stays live between scans; the quantity prompt overlays the viewfinder and saving returns you straight to scanning. A flashlight toggle appears on devices that support it.
+- **Quantity prompt** after every scan, with −/+ stepper and +5 / +10 / +100 quick-add buttons. Re-scanning an item lets you correct its quantity instead of duplicating it; scanning a new item while the prompt is open auto-saves the pending entry, and dismissing the prompt offers Undo.
 - **Offline-friendly local storage** — scans persist in `localStorage`, grouped by location (rename/delete/merge supported), and survive closing the browser. A service worker caches the app shell, so it loads and scans with no signal once visited.
 - **Installable PWA** — manifest + icons; "Add to Home Screen" gives an app icon and exempts the stored data from Safari's 7-day eviction.
 - **Configurable output format** — Settings lets you edit the file header, location header, and item line as templates with tokens (`{location}`, `{code}`, `{qty}`, `{date}`, `{count}`, `{units}`, …), with a live preview. Leave the location header blank for a flat one-line-per-item file.

@@ -105,18 +105,28 @@
     background: #eef3fb;
     color: var(--blue-dark);
     border-radius: 8px;
-    padding: 6px 12px;
+    padding: 10px 14px;
     border: none;
     cursor: pointer;
     min-width: 56px;
+    min-height: 44px; /* glove-friendly tap target */
   }
   .item-del {
     background: none;
     border: none;
     color: var(--red);
     font-size: 20px;
-    padding: 8px;
     cursor: pointer;
+    min-width: 44px;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #itemList li.flash { animation: rowFlash 1.2s ease-out; }
+  @keyframes rowFlash {
+    0% { background: #d3e8fb; }
+    100% { background: transparent; }
   }
   .empty { color: var(--muted); text-align: center; padding: 16px 0; font-size: 14px; }
   footer {
@@ -245,7 +255,7 @@
     position: fixed;
     top: 14px; left: 50%;
     transform: translateX(-50%);
-    background: var(--green);
+    background: #1a7a4e; /* darker than --green so 14px white text passes AA */
     color: #fff;
     padding: 10px 18px;
     border-radius: 999px;
@@ -253,8 +263,55 @@
     font-size: 14px;
     z-index: 99;
     display: none;
+    align-items: center;
+    gap: 10px;
+    max-width: calc(100vw - 24px);
     box-shadow: 0 4px 14px rgba(0,0,0,.25);
   }
+  .toast.error { background: var(--red); }
+  #toastAction {
+    background: rgba(255,255,255,.22);
+    border: none;
+    color: #fff;
+    font-weight: 700;
+    font-size: 14px;
+    padding: 8px 14px;
+    border-radius: 999px;
+    cursor: pointer;
+    flex: 0 0 auto;
+  }
+  /* quantity popup must stack above the camera view for continuous scanning */
+  #qtyModal { z-index: 60; }
+  .mini-actions { display: flex; gap: 8px; margin-top: 8px; }
+  .mini-actions button {
+    flex: 1;
+    background: #e5e6ea;
+    border: none;
+    border-radius: 8px;
+    padding: 12px 4px;
+    font-size: 14px;
+    color: var(--text);
+    cursor: pointer;
+    min-height: 44px;
+  }
+  #addLocBtn.pulse { animation: pulseBtn 2s infinite; }
+  @keyframes pulseBtn {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(26,95,180,.45); }
+    50% { box-shadow: 0 0 0 8px rgba(26,95,180,0); }
+  }
+  #torchBtn {
+    position: absolute;
+    top: 10px; right: 10px;
+    background: rgba(0,0,0,.5);
+    border: 2px solid rgba(255,255,255,.7);
+    color: #fff;
+    font-size: 20px;
+    border-radius: 50%;
+    width: 48px; height: 48px;
+    cursor: pointer;
+    z-index: 1;
+  }
+  #torchBtn.on { background: #ffd34d; border-color: #ffd34d; }
 </style>
 </head>
 <body>
@@ -270,15 +327,16 @@
     <div class="row">
       <select id="locSelect"></select>
       <button class="btn secondary" id="addLocBtn" style="flex:0 0 auto">+ New</button>
+      <button class="btn secondary" id="locMenuBtn" style="flex:0 0 auto" aria-label="Location options" aria-expanded="false">&#8943;</button>
     </div>
-    <div class="row" id="locActions" style="margin-top:8px">
+    <div class="row" id="locActions" style="margin-top:8px; display:none">
       <button class="btn secondary" id="renameLocBtn" style="flex:1">Rename</button>
       <button class="btn secondary" id="delLocBtn" style="flex:1">Delete location</button>
     </div>
   </div>
 
   <div class="card">
-    <label class="field-label" for="manualInput">Scan barcode (camera) or type / wedge-scan product ID</label>
+    <label class="field-label" for="manualInput">Enter or scan product ID</label>
     <div class="row">
       <input type="text" id="manualInput" inputmode="text" autocomplete="off" placeholder="Product ID">
       <button class="btn secondary" id="manualAddBtn" style="flex:0 0 auto">Add</button>
@@ -302,7 +360,7 @@
   </div>
 </footer>
 
-<div class="toast" id="toast"></div>
+<div class="toast" id="toast"><span id="toastMsg"></span><button id="toastAction" style="display:none"></button></div>
 
 <!-- quantity modal -->
 <div class="modal-backdrop" id="qtyModal">
@@ -332,6 +390,7 @@
     <div id="camWrap">
       <video id="camVideo" playsinline muted></video>
       <div id="camReticle"></div>
+      <button id="torchBtn" style="display:none" aria-label="Toggle flashlight">&#128294;</button>
     </div>
     <div id="camStatus">Point the camera at a barcode</div>
     <div class="row">
@@ -348,11 +407,11 @@
       <button class="modal-x" id="exportX" aria-label="Close">&#10005;</button>
     </div>
     <textarea id="exportText" readonly></textarea>
-    <div class="export-actions">
-      <button class="btn" id="shareBtn">&#128228; Share&hellip;</button>
-      <button class="btn" id="emailBtn">&#9993; Email</button>
-      <button class="btn secondary" id="downloadBtn">&#8595; Download</button>
-      <button class="btn secondary" id="copyBtn">Copy text</button>
+    <button class="btn green block" id="sendBtn" style="margin-top:12px">&#128228; Send file&hellip;</button>
+    <div class="mini-actions">
+      <button id="emailBtn">&#9993; Email</button>
+      <button id="downloadBtn">&#8595; Download</button>
+      <button id="copyBtn">Copy</button>
     </div>
     <div class="row">
       <button class="btn red" id="clearSentBtn">Sent &mdash; clear all scans</button>
@@ -418,17 +477,30 @@ function load() {
 }
 function save() {
   try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); }
-  catch (e) { toast("Couldn't save — device storage is full or blocked", 3500); }
+  catch (e) { toast("Couldn't save — device storage is full or blocked", { error: true, duration: 3500 }); }
 }
 
 /* ---------- helpers ---------- */
 const $ = id => document.getElementById(id);
-function toast(msg, ms) {
+/* toast(msg) — success; toast(msg, {error:true}) — red error variant;
+   toast(msg, {action:{label, fn}}) — adds an action button (e.g. Undo) */
+function toast(msg, opts) {
+  opts = opts || {};
   const t = $("toast");
-  t.textContent = msg;
-  t.style.display = "block";
+  $("toastMsg").textContent = msg;
+  t.classList.toggle("error", !!opts.error);
+  const act = $("toastAction");
+  if (opts.action) {
+    act.style.display = "";
+    act.textContent = opts.action.label;
+    act.onclick = () => { t.style.display = "none"; opts.action.fn(); };
+  } else {
+    act.style.display = "none";
+    act.onclick = null;
+  }
+  t.style.display = "flex";
   clearTimeout(toast._t);
-  toast._t = setTimeout(() => t.style.display = "none", ms || 1600);
+  toast._t = setTimeout(() => t.style.display = "none", opts.duration || (opts.action ? 5000 : 1600));
 }
 /* iOS only lets audio start inside a user gesture — call this from tap
    handlers so the later beep (fired from a scanner callback) is audible */
@@ -468,8 +540,20 @@ function renderLocations() {
   }
   sel.value = state.currentLoc;
   $("locName").textContent = state.currentLoc || "—";
-  $("locActions").style.display = state.currentLoc ? "flex" : "none";
+  $("addLocBtn").classList.toggle("pulse", state.locations.length === 0);
+  $("locMenuBtn").style.display = state.currentLoc ? "" : "none";
+  if (!state.currentLoc) closeLocMenu();
 }
+
+function closeLocMenu() {
+  $("locActions").style.display = "none";
+  $("locMenuBtn").setAttribute("aria-expanded", "false");
+}
+$("locMenuBtn").addEventListener("click", () => {
+  const open = $("locActions").style.display !== "none";
+  $("locActions").style.display = open ? "none" : "flex";
+  $("locMenuBtn").setAttribute("aria-expanded", String(!open));
+});
 
 $("addLocBtn").addEventListener("click", () => {
   const name = (prompt("New location name:") || "").trim();
@@ -503,7 +587,7 @@ $("renameLocBtn").addEventListener("click", () => {
   }
   delete state.scans[old];
   state.currentLoc = name;
-  save(); renderAll();
+  save(); closeLocMenu(); renderAll();
 });
 
 $("delLocBtn").addEventListener("click", () => {
@@ -514,7 +598,7 @@ $("delLocBtn").addEventListener("click", () => {
   state.locations = state.locations.filter(l => l !== state.currentLoc);
   delete state.scans[state.currentLoc];
   state.currentLoc = state.locations[0] || "";
-  save(); renderAll();
+  save(); closeLocMenu(); renderAll();
 });
 
 /* ---------- items ---------- */
@@ -523,13 +607,20 @@ function itemsHere() {
   return state.scans[state.currentLoc] || (state.scans[state.currentLoc] = []);
 }
 
+let flashCode = null; // row to highlight after a save
+
 function renderItems() {
   const ul = $("itemList");
   ul.innerHTML = "";
   const items = state.currentLoc ? (state.scans[state.currentLoc] || []) : [];
   $("emptyMsg").style.display = items.length ? "none" : "block";
-  items.forEach((it, i) => {
+  $("emptyMsg").textContent = state.currentLoc
+    ? "No items scanned here yet."
+    : "Start by adding your first location — tap “+ New” above.";
+  // newest first, so the row you just scanned is always visible
+  items.slice().reverse().forEach(it => {
     const li = document.createElement("li");
+    if (it.code === flashCode) li.classList.add("flash");
     const code = document.createElement("span");
     code.className = "item-code";
     code.textContent = it.code;
@@ -543,12 +634,22 @@ function renderItems() {
     del.innerHTML = "&#10005;";
     del.setAttribute("aria-label", "Remove " + it.code);
     del.addEventListener("click", () => {
-      items.splice(i, 1);
+      const loc = state.currentLoc;
+      const idx = items.indexOf(it);
+      if (idx === -1) return;
+      items.splice(idx, 1);
       save(); renderAll();
+      toast("Removed " + it.code, { action: { label: "Undo", fn: () => {
+        const arr = state.scans[loc];
+        if (!arr) return;
+        arr.splice(Math.min(idx, arr.length), 0, it);
+        save(); renderAll();
+      } } });
     });
     li.append(code, qty, del);
     ul.appendChild(li);
   });
+  flashCode = null;
 
   let locs = 0, lines = 0, units = 0;
   for (const loc of state.locations) {
@@ -567,7 +668,7 @@ function renderAll() { renderLocations(); renderItems(); }
 let qtyTarget = null; // product code being edited
 
 function openQty(code, existingQty) {
-  if (!state.currentLoc) { toast("Pick a location first"); return; }
+  if (!state.currentLoc) { toast("Pick a location first", { error: true }); return; }
   qtyTarget = code;
   $("qtyCode").textContent = code;
   $("qtyInput").value = existingQty || 1;
@@ -579,6 +680,20 @@ function openQty(code, existingQty) {
   }
 }
 function closeQty() { $("qtyModal").classList.remove("open"); qtyTarget = null; }
+
+/* dismissing the popup (Cancel / backdrop / Escape) discards the scan —
+   say so, and offer a way back */
+function discardQty() {
+  if (!$("qtyModal").classList.contains("open") || qtyTarget === null) { closeQty(); return; }
+  const code = qtyTarget;
+  const typed = parseInt($("qtyInput").value, 10) || 1;
+  closeQty();
+  if (camOpen()) {
+    lastHit = { code: code, ts: Date.now() }; // grace period before the same label re-triggers
+    $("camStatus").textContent = "Scan discarded — point at a barcode";
+  }
+  toast("Scan discarded", { action: { label: "Undo", fn: () => openQty(code, typed) } });
+}
 
 $("qtyMinus").addEventListener("click", () => {
   $("qtyInput").value = Math.max(1, (parseInt($("qtyInput").value, 10) || 1) - 1);
@@ -592,19 +707,26 @@ document.querySelectorAll(".qty-quick button").forEach(btn => {
     $("qtyInput").value = (parseInt($("qtyInput").value, 10) || 0) + add;
   });
 });
-$("qtyCancel").addEventListener("click", closeQty);
+$("qtyCancel").addEventListener("click", discardQty);
 $("qtySave").addEventListener("click", saveQty);
 $("qtyInput").addEventListener("keydown", e => { if (e.key === "Enter") saveQty(); });
 
 function saveQty() {
   const qty = parseInt($("qtyInput").value, 10);
-  if (!qty || qty < 1) { toast("Enter a quantity of 1 or more"); return; }
+  if (!qty || qty < 1) { toast("Enter a quantity of 1 or more", { error: true }); return; }
+  const code = qtyTarget;
   const items = itemsHere();
-  const existing = items.find(it => it.code === qtyTarget);
+  const existing = items.find(it => it.code === code);
   if (existing) existing.qty = qty;
-  else items.push({ code: qtyTarget, qty: qty, ts: new Date().toISOString() });
+  else items.push({ code: code, qty: qty, ts: new Date().toISOString() });
+  flashCode = code;
   save(); renderAll(); closeQty();
-  toast("Saved " + qtyTarget + " ×" + qty);
+  if (camOpen()) {
+    // continuous scanning: give the user a moment to move off the label
+    lastHit = { code: code, ts: Date.now() };
+    $("camStatus").textContent = "Saved ×" + qty + " — point at the next barcode";
+  }
+  toast("Saved " + code + " ×" + qty);
 }
 
 /* if a new scan arrives while the quantity popup is still open, commit the
@@ -617,6 +739,7 @@ function commitPending() {
   const qty = (typed && typed >= 1) ? typed : (existing ? existing.qty : 1);
   if (existing) existing.qty = qty;
   else items.push({ code: qtyTarget, qty: qty, ts: new Date().toISOString() });
+  flashCode = qtyTarget;
   save();
 }
 
@@ -628,7 +751,7 @@ function onCode(code) {
     return (cc < 32 || cc === 127) ? " " : ch;
   }).join("").trim();
   if (!code) return;
-  if (!state.currentLoc) { toast("Pick a location first"); return; }
+  if (!state.currentLoc) { toast("Pick a location first", { error: true }); return; }
   commitPending();
   beep();
   const existing = itemsHere().find(it => it.code === code);
@@ -678,7 +801,7 @@ function camErrorText(err, isIOS) {
 const camOpen = () => $("camModal").classList.contains("open");
 
 async function openCamera() {
-  if (!state.currentLoc) { toast("Pick a location first"); return; }
+  if (!state.currentLoc) { toast("Pick a location first", { error: true }); return; }
   initAudio(); // user gesture — unlock audio so the scan beep works on iOS
   lastHit = { code: "", ts: 0 }; // fresh session: allow immediate re-scan of the last label
   $("camModal").classList.add("open");
@@ -706,6 +829,7 @@ async function openCamera() {
     // the user may have closed the modal while the permission prompt was up
     if (!camOpen()) { stream.getTracks().forEach(t => t.stop()); return; }
     camStream = stream;
+    setupTorch();
     const video = $("camVideo");
     video.srcObject = camStream;
     await video.play();
@@ -786,12 +910,14 @@ function loadScript(src) {
 
 function hit(code) {
   // stray results can still arrive after the camera closes — never act on them
-  if (!$("camModal").classList.contains("open")) return;
+  if (!camOpen()) return;
+  // continuous scanning: the camera stays live behind the quantity popup;
+  // ignore further reads until the current one is saved or discarded
+  if ($("qtyModal").classList.contains("open")) return;
   const now = Date.now();
   // ignore repeat reads of the same label for 2.5s
   if (code === lastHit.code && now - lastHit.ts < 2500) return;
   lastHit = { code: code, ts: now };
-  closeCamera();
   onCode(code);
 }
 
@@ -801,7 +927,29 @@ function closeCamera() {
   if (zxingControls) { try { zxingControls.stop(); } catch (e) {} zxingControls = null; }
   if (camStream) { camStream.getTracks().forEach(t => t.stop()); camStream = null; }
   $("camVideo").srcObject = null;
+  $("torchBtn").style.display = "none";
+  $("torchBtn").classList.remove("on");
 }
+
+/* flashlight — only offered when the camera reports torch support */
+function setupTorch() {
+  const btn = $("torchBtn");
+  btn.classList.remove("on");
+  let caps = {};
+  try {
+    const track = camStream.getVideoTracks()[0];
+    caps = track.getCapabilities ? track.getCapabilities() : {};
+  } catch (e) { /* no capabilities API */ }
+  btn.style.display = caps.torch ? "" : "none";
+}
+$("torchBtn").addEventListener("click", () => {
+  if (!camStream) return;
+  const on = !$("torchBtn").classList.contains("on");
+  $("torchBtn").classList.toggle("on", on);
+  camStream.getVideoTracks()[0]
+    .applyConstraints({ advanced: [{ torch: on }] })
+    .catch(() => { $("torchBtn").classList.remove("on"); });
+});
 
 /* ---------- export ---------- */
 /* turn \t and \n escapes in the template into real characters FIRST, then
@@ -859,7 +1007,19 @@ $("exportBtn").addEventListener("click", () => {
 $("exportClose").addEventListener("click", () => $("exportModal").classList.remove("open"));
 $("exportX").addEventListener("click", () => $("exportModal").classList.remove("open"));
 
-$("shareBtn").addEventListener("click", async () => {
+function sendByEmail(text) {
+  // mailto links have length limits that vary by mail app — large files get
+  // cut off silently, so warn and steer toward Send/Download
+  if (text.length > 1500 && !confirm("This file is long, and email links often cut off large text. Send or Download is safer for big scans. Open email anyway?")) return;
+  const to = encodeURIComponent(state.email || "");
+  const subject = encodeURIComponent("Order scan export " + fileName());
+  const body = encodeURIComponent(text);
+  location.href = "mailto:" + to + "?subject=" + subject + "&body=" + body;
+}
+
+/* primary action: share sheet with the file attached where supported,
+   otherwise fall straight through to email */
+$("sendBtn").addEventListener("click", async () => {
   const text = $("exportText").value;
   const file = new File([text], fileName(), { type: "text/plain" });
   try {
@@ -868,21 +1028,12 @@ $("shareBtn").addEventListener("click", async () => {
     } else if (navigator.share) {
       await navigator.share({ title: "Order scan export", text: text });
     } else {
-      toast("Sharing not supported here — use Email or Download");
+      sendByEmail(text);
     }
   } catch (e) { /* user cancelled share sheet */ }
 });
 
-$("emailBtn").addEventListener("click", () => {
-  const text = $("exportText").value;
-  // mailto links have length limits that vary by mail app — large files get
-  // cut off silently, so warn and steer toward Share/Download
-  if (text.length > 1500 && !confirm("This file is long, and email links often cut off large text. Share or Download is safer for big scans. Open email anyway?")) return;
-  const to = encodeURIComponent(state.email || "");
-  const subject = encodeURIComponent("Order scan export " + fileName());
-  const body = encodeURIComponent(text);
-  location.href = "mailto:" + to + "?subject=" + subject + "&body=" + body;
-});
+$("emailBtn").addEventListener("click", () => sendByEmail($("exportText").value));
 
 $("downloadBtn").addEventListener("click", () => {
   const blob = new Blob([$("exportText").value], { type: "text/plain" });
@@ -956,7 +1107,7 @@ $("settingsBtn").addEventListener("click", () => {
 $("settingsX").addEventListener("click", () => $("settingsModal").classList.remove("open"));
 $("settingsSave").addEventListener("click", () => {
   const fmt = formatFromFields();
-  if (!fmt.line.trim()) { toast("Item line can't be empty"); return; }
+  if (!fmt.line.trim()) { toast("Item line can't be empty", { error: true }); return; }
   state.email = $("emailInput").value.trim();
   state.format = fmt;
   save();
@@ -973,9 +1124,11 @@ $("wipeBtn").addEventListener("click", () => {
 
 /* close modals when tapping the backdrop or pressing Escape — always through
    the proper close function so camera/state teardown happens */
+// qtyModal first: it can sit on top of the camera, so Escape must reach it first;
+// dismissing it is a discard, which announces itself and offers Undo
 const MODAL_CLOSERS = {
+  qtyModal: discardQty,
   camModal: closeCamera,
-  qtyModal: closeQty,
   exportModal: () => $("exportModal").classList.remove("open"),
   settingsModal: () => $("settingsModal").classList.remove("open")
 };
